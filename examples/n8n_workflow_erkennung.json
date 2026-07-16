@@ -1,0 +1,183 @@
+{
+  "name": "Vogelbad - Erkennung (Frigate -> Ollama)",
+  "nodes": [
+    {
+      "parameters": {
+        "topics": "frigate/events",
+        "options": {}
+      },
+      "id": "a1000000-0000-0000-0000-000000000001",
+      "name": "MQTT: Frigate Events",
+      "type": "n8n-nodes-base.mqttTrigger",
+      "typeVersion": 1,
+      "position": [-1200, 300],
+      "credentials": {
+        "mqtt": {
+          "id": "REPLACE_MIT_MQTT_CREDENTIAL_ID",
+          "name": "Mosquitto (NUC-HA)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = JSON.parse($input.item.json.message);\nconst after = payload.after || {};\n\nconst isBird = after.label === 'bird';\nconst isVogelbad = after.camera === 'vogelbad';\nconst isEndOrSnapshot = payload.type === 'end' && after.has_snapshot === true;\n\nif (!isBird || !isVogelbad || !isEndOrSnapshot) {\n  return [];\n}\n\nreturn [{\n  json: {\n    event_id: after.id,\n    camera: after.camera,\n    label: after.label,\n    score: after.top_score,\n    start_time: after.start_time,\n    end_time: after.end_time\n  }\n}];"
+      },
+      "id": "a1000000-0000-0000-0000-000000000002",
+      "name": "Filter: neues Vogel-Event mit Snapshot",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-980, 300]
+    },
+    {
+      "parameters": {
+        "url": "=http://<frigate-host>:5000/api/events/{{ $json.event_id }}/snapshot.jpg",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "a1000000-0000-0000-0000-000000000003",
+      "name": "Frigate: Snapshot holen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-760, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const base64 = $input.item.binary.data.data;\nreturn [{\n  json: {\n    ...$input.item.json,\n    image_base64: base64\n  },\n  binary: $input.item.binary\n}];"
+      },
+      "id": "a1000000-0000-0000-0000-000000000004",
+      "name": "Bild zu Base64",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-540, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://<ollama-host>:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"qwen2.5vl:7b\",\n  \"stream\": false,\n  \"format\": \"json\",\n  \"prompt\": \"Du bist ein Ornithologe. Bestimme die Vogel- oder Tierart auf diesem Foto einer Vogeltraenke in einem deutschen Garten (Ottobrunn/Muenchen). Antworte AUSSCHLIESSLICH als JSON-Objekt mit genau diesen Feldern: {\\\"umgangssprachlich\\\": \\\"deutscher Trivialname, z.B. Blaumeise\\\", \\\"lateinisch\\\": \\\"wissenschaftlicher Name, z.B. Cyanistes caeruleus\\\", \\\"konfidenz\\\": Zahl zwischen 0 und 1, \\\"ist_vogel\\\": true/false, \\\"anmerkung\\\": \\\"kurze Notiz, z.B. Beleuchtung schlecht, teilweise verdeckt\\\"}. Falls kein Tier erkennbar ist, setze ist_vogel auf false und umgangssprachlich auf 'kein Tier erkennbar'. HINWEIS: Dieser Prompt kann im n8n-Node direkt angepasst werden, um Genauigkeit/Verhalten zu tunen.\",\n  \"images\": [\"{{ $json.image_base64 }}\"]\n}",
+        "options": {}
+      },
+      "id": "a1000000-0000-0000-0000-000000000005",
+      "name": "Ollama: qwen2.5vl Artbestimmung",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-320, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.item.json.response;\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  parsed = { umgangssprachlich: 'Parse-Fehler', lateinisch: '', konfidenz: 0, ist_vogel: false, anmerkung: String(raw).slice(0,200) };\n}\n\nreturn [{\n  json: {\n    event_id: $node['Filter: neues Vogel-Event mit Snapshot'].json.event_id,\n    umgangssprachlich: parsed.umgangssprachlich || 'unbekannt',\n    lateinisch: parsed.lateinisch || '',\n    konfidenz: parsed.konfidenz ?? 0,\n    ist_vogel: parsed.ist_vogel ?? true,\n    anmerkung: parsed.anmerkung || '',\n    zeitstempel: new Date().toISOString(),\n    bild_url: `http://<frigate-host>:5000/api/events/${$node['Filter: neues Vogel-Event mit Snapshot'].json.event_id}/snapshot.jpg`\n  }\n}];"
+      },
+      "id": "a1000000-0000-0000-0000-000000000006",
+      "name": "Ollama-Antwort parsen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-100, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.ist_vogel }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-0000-0000-000000000007",
+      "name": "IF: ist_vogel",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [120, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO vogelbad_historie (event_id, umgangssprachlich, lateinisch, konfidenz, anmerkung, zeitstempel, bild_url)\nVALUES ('{{ $json.event_id }}', '{{ $json.umgangssprachlich.replace(\"'\", \"''\") }}', '{{ $json.lateinisch.replace(\"'\", \"''\") }}', {{ $json.konfidenz }}, '{{ $json.anmerkung.replace(\"'\", \"''\") }}', '{{ $json.zeitstempel }}', '{{ $json.bild_url }}');"
+      },
+      "id": "a1000000-0000-0000-0000-000000000008",
+      "name": "SQLite: Historie speichern",
+      "type": "n8n-nodes-base.sqlite",
+      "typeVersion": 1,
+      "position": [340, 200],
+      "credentials": {
+        "sqlite": {
+          "id": "REPLACE_MIT_SQLITE_CREDENTIAL_ID",
+          "name": "vogelbad_historie.db"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "topic": "home/vogelbad/erkennung",
+        "options": {
+          "qos": 1,
+          "retain": true
+        },
+        "message": "={{ JSON.stringify({ umgangssprachlich: $json.umgangssprachlich, lateinisch: $json.lateinisch, konfidenz: $json.konfidenz, anmerkung: $json.anmerkung, zeitstempel: $json.zeitstempel, bild_url: $json.bild_url }) }}"
+      },
+      "id": "a1000000-0000-0000-0000-000000000009",
+      "name": "MQTT: an Home Assistant publishen",
+      "type": "n8n-nodes-base.mqtt",
+      "typeVersion": 1,
+      "position": [340, 400],
+      "credentials": {
+        "mqtt": {
+          "id": "REPLACE_MIT_MQTT_CREDENTIAL_ID",
+          "name": "Mosquitto (NUC-HA)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "MQTT: Frigate Events": {
+      "main": [[{ "node": "Filter: neues Vogel-Event mit Snapshot", "type": "main", "index": 0 }]]
+    },
+    "Filter: neues Vogel-Event mit Snapshot": {
+      "main": [[{ "node": "Frigate: Snapshot holen", "type": "main", "index": 0 }]]
+    },
+    "Frigate: Snapshot holen": {
+      "main": [[{ "node": "Bild zu Base64", "type": "main", "index": 0 }]]
+    },
+    "Bild zu Base64": {
+      "main": [[{ "node": "Ollama: qwen2.5vl Artbestimmung", "type": "main", "index": 0 }]]
+    },
+    "Ollama: qwen2.5vl Artbestimmung": {
+      "main": [[{ "node": "Ollama-Antwort parsen", "type": "main", "index": 0 }]]
+    },
+    "Ollama-Antwort parsen": {
+      "main": [[{ "node": "IF: ist_vogel", "type": "main", "index": 0 }]]
+    },
+    "IF: ist_vogel": {
+      "main": [
+        [
+          { "node": "SQLite: Historie speichern", "type": "main", "index": 0 },
+          { "node": "MQTT: an Home Assistant publishen", "type": "main", "index": 0 }
+        ],
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

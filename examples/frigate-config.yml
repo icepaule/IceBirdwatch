@@ -1,0 +1,59 @@
+mqtt:
+  host: "<mqtt-broker-ip>"
+  port: 1883
+  user: "CHANGE_ME"
+  password: "CHANGE_ME"
+  topic_prefix: frigate
+
+detectors:
+  cpu1:
+    type: cpu
+    num_threads: 2
+
+# ---------------------------------------------------------------------------
+# TODO (morgen, nach Lieferung der WAVEEME-Kamera):
+# 1. Kamera per App ans WLAN koppeln (Bad!Net oder Bad!IoT je nach Standort)
+# 2. IP der Kamera ermitteln (z.B. per nmap-Scan oder AdGuard-DHCP-Leases)
+# 3. nmap -p 554,34567,8000,37777,80 <Kamera-IP> -> pruefen welche Ports offen sind
+# 4. RTSP-URL unten anpassen (Standard-Xiongmai-Muster, Nutzer/Passwort ggf. aus App/Label):
+#    rtsp://<user>:<pass>@<Kamera-IP>:554/user=<user>&password=<pass>&channel=1&stream=0.sdp
+# 5. Nach Anpassung: docker compose restart im CT203 (frigate01)
+# ---------------------------------------------------------------------------
+cameras:
+  vogelbad:
+    ffmpeg:
+      inputs:
+        - path: rtsp://TODO-USER:TODO-PASSWORD@TODO-KAMERA-IP:554/user=TODO-USER&password=TODO-PASSWORD&channel=1&stream=0.sdp
+          roles:
+            - detect
+            - record
+    detect:
+      width: 1280
+      height: 720
+      fps: 5
+    objects:
+      track:
+        - bird
+      filters:
+        bird:
+          min_score: 0.6
+          threshold: 0.7
+    record:
+      enabled: true
+      retain:
+        days: 7
+        mode: motion
+    snapshots:
+      enabled: true
+      bounding_box: false
+      retain:
+        default: 30
+
+record:
+  enabled: true
+  retain:
+    days: 3
+    mode: all
+
+snapshots:
+  enabled: true

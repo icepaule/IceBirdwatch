@@ -1,0 +1,72 @@
+{
+  "name": "Vogelbad - Historie API (fuer Home Assistant)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "vogelbad-historie",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b1000000-0000-0000-0000-000000000001",
+      "name": "Webhook: /vogelbad-historie",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-600, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT event_id, umgangssprachlich, lateinisch, konfidenz, anmerkung, zeitstempel, bild_url\nFROM vogelbad_historie\nORDER BY zeitstempel DESC\nLIMIT 50;"
+      },
+      "id": "b1000000-0000-0000-0000-000000000002",
+      "name": "SQLite: letzte 50 Erkennungen",
+      "type": "n8n-nodes-base.sqlite",
+      "typeVersion": 1,
+      "position": [-380, 300],
+      "credentials": {
+        "sqlite": {
+          "id": "REPLACE_MIT_SQLITE_CREDENTIAL_ID",
+          "name": "vogelbad_historie.db"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { eintraege: items.map(i => i.json) } }];"
+      },
+      "id": "b1000000-0000-0000-0000-000000000003",
+      "name": "Zu Liste zusammenfassen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-160, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "b1000000-0000-0000-0000-000000000004",
+      "name": "Antwort senden",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [60, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: /vogelbad-historie": {
+      "main": [[{ "node": "SQLite: letzte 50 Erkennungen", "type": "main", "index": 0 }]]
+    },
+    "SQLite: letzte 50 Erkennungen": {
+      "main": [[{ "node": "Zu Liste zusammenfassen", "type": "main", "index": 0 }]]
+    },
+    "Zu Liste zusammenfassen": {
+      "main": [[{ "node": "Antwort senden", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
