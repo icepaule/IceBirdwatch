@@ -20,10 +20,11 @@ Heimnetz verlassen.
 ```mermaid
 flowchart LR
     subgraph Garten
-        CAM["WAVEEME Kamera<br/>(vermutlich Xiongmai-Basis)<br/>RTSP :554"]
+        CAM["WAVEEME Kamera<br/>(Xiongmai/DVRIP bestaetigt)<br/>DVRIP :34567"]
     end
 
     subgraph "prox2 — CT203 frigate01"
+        CROP["go2rtc exec-Stream<br/>Privacy-Crop<br/>(Nachbarhaus raus)"]
         FRIGATE["Frigate NVR<br/>Bewegungs-/Objekt-<br/>erkennung (bird)"]
     end
 
@@ -41,7 +42,8 @@ flowchart LR
     end
 
     CAM -- DVRIP-Stream --> RELAY
-    RELAY -- weitergeleitet --> FRIGATE
+    RELAY -- weitergeleitet --> CROP
+    CROP -- "zugeschnittener Stream" --> FRIGATE
     FRIGATE -- "MQTT: frigate/reviews<br/>(objects=[bird], Ende)" --> MQTT
     MQTT -- Event --> N8N
     N8N -- "Snapshot holen<br/>(Frigate API)" --> FRIGATE
@@ -79,8 +81,21 @@ anpassen lässt.
 - [x] Privacy-Crop aktiv (Nachbarhaus rechts ausgeblendet, siehe docs/setup.md)
 - [ ] Erste echte Vogel-Erkennung abgewartet
 
-Details siehe [docs/setup.md](docs/setup.md), Hardware-Hintergrund siehe
-[docs/hardware.md](docs/hardware.md).
+## Dokumentation
+
+| Dokument | Inhalt |
+|---|---|
+| [docs/hardware.md](docs/hardware.md) | Kamera-Hintergrund, Xiongmai-Diagnose, Produktbilder |
+| [docs/setup.md](docs/setup.md) | Komplette Schritt-für-Schritt-Anleitung (Kamera → Frigate → n8n → HA), Privacy-Crop |
+| [docs/ki-erkennung.md](docs/ki-erkennung.md) | Die lokale KI-Erkennung im Detail: n8n-Workflow node-für-node, Ollama-Prompt |
+| [docs/homeassistant.md](docs/homeassistant.md) | Home-Assistant-Dashboard, Kiosk-Banner, Entities — mit Screenshots |
+
+## Home Assistant Dashboard
+
+![Home Assistant Dashboard - Übersicht](docs/images/ha-dashboard-uebersicht.png)
+
+Live-Bild (bereits privacy-gecroppt), aktuelle Art, Konfidenz, Historie —
+Details und weitere Screenshots in [docs/homeassistant.md](docs/homeassistant.md).
 
 ## Keine sensiblen Daten in diesem Repo
 

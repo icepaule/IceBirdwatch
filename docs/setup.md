@@ -1,4 +1,9 @@
-# Setup
+# Setup — Schritt für Schritt
+
+Diese Anleitung deckt die komplette Kette ab: Kamera → Frigate → n8n/Ollama
+→ Home Assistant. Für die KI-Erkennung im Detail siehe
+[ki-erkennung.md](ki-erkennung.md), für die Home-Assistant-Seite
+[homeassistant.md](homeassistant.md) (mit Screenshots).
 
 ## Ablauf einer Erkennung
 
@@ -9,62 +14,120 @@ sequenceDiagram
     participant MQTT as Mosquitto
     participant n8n
     participant Ollama
-    participant DB as SQLite
+    participant JSON as vogelbad_historie.json
     participant HA as Home Assistant
 
-    Cam->>Frigate: RTSP-Stream
+    Cam->>Frigate: Video-Stream (DVRIP/RTSP)
     Frigate->>Frigate: Bewegung + Objekt "bird" erkannt
     Frigate->>MQTT: publish frigate/reviews (type=end, objects=[bird])
     MQTT->>n8n: Trigger
     n8n->>Frigate: GET Snapshot (JPEG)
     n8n->>Ollama: POST /api/generate (Bild + Prompt, qwen2.5vl)
     Ollama-->>n8n: JSON (Art, lateinisch, Konfidenz)
-    n8n->>DB: INSERT Historie-Eintrag
+    n8n->>JSON: neuer Eintrag anhängen
     n8n->>MQTT: publish home/vogelbad/erkennung
     MQTT->>HA: MQTT-Sensor aktualisiert
     HA->>HA: Automation -> Notification + Kiosk-Banner
 ```
 
-## 1. Frigate (`examples/frigate-config.yml`)
+## Schritt 1: Kamera-Diagnose
 
-Läuft als Docker-Container (`examples/frigate-compose.yml`). Wichtigster
-Schritt nach Kamera-Diagnose (siehe [hardware.md](hardware.md)):
+Siehe [hardware.md](hardware.md) für das vollständige Vorgehen (nmap-Scan,
+Protokoll-Erkennung). Ergebnis ist entweder eine fertige RTSP-URL oder —
+bei Xiongmai/DVRIP-Kameras wie dieser — IP, Port (meist `34567`), Nutzer
+und Passwort für das DVRIP-Protokoll.
+
+## Schritt 2: Netzwerk-Erreichbarkeit sicherstellen
+
+Läuft die Kamera in einem eigenen IoT-VLAN mit Isolation, hat der
+Frigate-Host darauf womöglich **gar keinen** Zugriff (nicht nur einzelne
+Ports) — selbst wenn andere Dienste auf demselben Host andere Netze
+problemlos erreichen. Kurzer Test von beiden Seiten:
+
+```bash
+# Vom Frigate-Host aus:
+timeout 3 bash -c 'echo > /dev/tcp/<kamera-ip>/34567' && echo OK || echo FAIL
+```
+
+Schlägt das fehl, obwohl die Kamera nachweislich läuft: einen Host finden,
+der Zugriff auf beide Netze hat (z.B. weil er selbst eine IP im
+IoT-Segment hat), und dort einen simplen TCP-Relay aufsetzen:
+
+```bash
+# systemd-Service, z.B. /etc/systemd/system/kamera-relay.service
+[Unit]
+Description=TCP-Relay zur IoT-VLAN-isolierten Kamera
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/socat -d TCP-LISTEN:34567,fork,reuseaddr TCP:<kamera-ip>:34567
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Frigate zeigt danach auf `<relay-host>:34567` statt direkt auf die
+Kamera-IP.
+
+## Schritt 3: Frigate aufsetzen
+
+`examples/frigate-compose.yml` und `examples/frigate-config.yml` als
+Ausgangspunkt nehmen, Platzhalter ersetzen. Läuft als eigenständiger
+Docker-Container:
+
+```bash
+docker compose up -d
+```
+
+Web-UI unter `http://<frigate-host>:5000`, ohne Login (sofern nicht extra
+abgesichert):
+
+![Frigate Live-Ansicht](images/frigate-live.png)
+
+Bei DVRIP-Kameras übernimmt **go2rtc** (in Frigate eingebaut) das
+Protokoll nativ — keine RTSP-URL-Bastelei nötig:
 
 ```yaml
+go2rtc:
+  streams:
+    vogelbad_dvrip:
+      - dvrip://<user>:<passwort>@<kamera-oder-relay-ip>:34567
+
 cameras:
   vogelbad:
     ffmpeg:
       inputs:
-        - path: rtsp://<user>:<passwort>@<kamera-ip>:554/user=<user>&password=<passwort>&channel=1&stream=0.sdp
+        - path: rtsp://127.0.0.1:8554/vogelbad_dvrip
+          input_args: preset-rtsp-restream
+          roles: [detect, record]
 ```
 
-Danach `docker compose restart`. Web-UI unter `http://<frigate-host>:5000`.
+Nach Config-Änderungen: `docker compose restart`.
 
-## 2. n8n-Workflows
+## Schritt 4 (optional): Privacy-Crop
 
-Zwei Workflows, in der n8n-UI über **Import from File** einzulesen:
+Falls die Kamera Nachbargrundstück mit im Bild hat: siehe eigener
+Abschnitt weiter unten.
 
-- `examples/n8n_workflow_erkennung.json` — MQTT-Trigger, holt Snapshot,
-  fragt Ollama, speichert Historie, publisht an MQTT.
-- `examples/n8n_workflow_historie.json` — Webhook-Endpoint
-  `/webhook/vogelbad-historie`, liefert die letzten 50 Erkennungen als JSON
-  für Home Assistant.
+## Schritt 5: n8n-Workflows
 
-Nach Import:
+Ausführlich in [ki-erkennung.md](ki-erkennung.md) beschrieben — hier nur
+die Einrichtungsschritte:
 
-1. **MQTT-Credential** anlegen (Broker-Host/Port/User/Passwort des eigenen
-   Mosquitto) und in beiden MQTT-Nodes zuweisen.
-2. **Keine Datenbank nötig**: Die Historie wird als einfache JSON-Datei
-   (`~/.n8n/vogelbad_historie.json`, Startinhalt `[]`) direkt per `fs` in den
-   Code-Nodes gelesen/geschrieben — das n8n-nodes-base-Paket bringt in
-   aktuellen Versionen keinen SQLite-Node mehr mit, und ein DB-Credential
-   entfällt damit komplett. Datei einmalig anlegen und für den n8n-User
-   beschreibbar machen.
-3. Beide Workflows **aktivieren**.
-4. **Ollama-Prompt anpassen**: Node "Ollama: qwen2.5vl Artbestimmung" im
-   ersten Workflow → `jsonBody` → Feld `prompt`. Genau hier ist der Punkt, an
-   dem sich Sprache, Detailgrad oder Sonderregeln (z.B. "auch Eichhörnchen
-   erkennen") ändern lassen, ohne Code anzufassen.
+1. Beide Workflow-Dateien in der n8n-UI über **Import from File** einlesen:
+   `examples/n8n_workflow_erkennung.json` und
+   `examples/n8n_workflow_historie.json`.
+2. **MQTT-Credential** anlegen (Broker-Host/Port/User/Passwort) und in
+   beiden MQTT-Nodes zuweisen.
+3. **Historie-Datei anlegen**: `~/.n8n/vogelbad_historie.json` mit Inhalt
+   `[]`, beschreibbar für den n8n-Prozess. Kein Datenbank-Credential nötig
+   — aktuelle n8n-Versionen bringen keinen SQLite-Node mehr mit, die
+   Historie wird direkt als JSON-Datei geführt.
+4. Beide Workflows **aktivieren**.
+5. **Ollama-Prompt anpassen** (optional): Node "Ollama: qwen2.5vl
+   Artbestimmung" → `jsonBody` → Feld `prompt`.
 
 ### Zwei Stolpersteine bei aktuellen Frigate-/n8n-Versionen
 
@@ -74,7 +137,9 @@ Nach Import:
   `after.data.objects` (Array von Labels wie `"bird"`) und
   `after.data.detections` (Array der eigentlichen Event-IDs, die für den
   Snapshot-Abruf gebraucht werden). Der Filter-Node im Workflow ist bereits
-  auf dieses Schema angepasst.
+  auf dieses Schema angepasst. Wer eine andere Frigate-Version nutzt: erst
+  per `mosquitto_sub -t 'frigate/#' -v` das tatsächliche Schema prüfen,
+  nicht blind übernehmen.
 - **Große Snapshots landen bei n8n im `filesystem-v2`-Binärmodus.** Der
   klassische Trick `$input.item.binary.data.data` liefert dann nur den
   String `"filesystem-v2"` statt echter Bilddaten (Ollama meldet dann
@@ -85,10 +150,22 @@ Nach Import:
   separaten JS-Task-Runner, der auf Binärdaten-Zugriff nicht zuverlässig
   reagiert.
 
+## Schritt 6: Home Assistant
+
+Siehe [homeassistant.md](homeassistant.md) — Dashboard, Kiosk-Banner,
+Entities, mit Screenshots.
+
 ## Privacy-Crop (Nachbargrundstück ausblenden)
 
 Bei Weitwinkel-/Fisheye-Kameras wie dieser landet fast immer ungewollt
-Nachbargrundstück im Bild. Getestet und wieder verworfen wurde die
+Nachbargrundstück im Bild.
+
+![Ergebnis nach dem Privacy-Crop](images/vogelbad-crop-ergebnis.jpg)
+
+*Live-Bild nach dem Crop (Nachtsicht-Aufnahme) — das Nachbarhaus rechts ist
+komplett aus dem Bild, nur noch die eigene Terrasse und der Garten sind zu
+sehen.*
+ Getestet und wieder verworfen wurde die
 **native Privacy-Mask der Kamera-Firmware** (Xiongmai-Feld
 `AVEnc.VideoWidget.Covers`, per DVRIP setzbar, API bestätigt Erfolg) — im
 echten Geräte-Config-Export steht aber `"AVEnc.Cover": null`, d.h. das
@@ -115,6 +192,10 @@ cameras:
           input_args: preset-rtsp-restream
           roles: [detect, record]
 ```
+
+`exec:`-Quellen sind in go2rtc aus Sicherheitsgründen standardmäßig
+deaktiviert — im Compose-File `GO2RTC_ALLOW_ARBITRARY_EXEC=true` als
+Environment-Variable setzen (siehe `examples/frigate-compose.yml`).
 
 Zwei nicht offensichtliche Stolpersteine dabei:
 
@@ -146,32 +227,9 @@ Vollbild der Kamera abgleichen, statt Pixel zu schätzen — deutlich
 präziser als Augenmaß, funktioniert auch wenn Referenzbild und Vollbild
 unterschiedliche Auflösung/Seitenverhältnis/Kompression haben.
 
-## 3. Home Assistant
-
-- `examples/ha-package-vogelbad_kamera.yaml` → nach `packages/` kopieren.
-  Enthält MQTT-Sensor, REST/Template-Sensor für die Historie, und die
-  Notification-Automation.
-- `examples/ha-dashboard-vogelbad.yaml` → nach `dashboards/` kopieren, dazu
-  in `configuration.yaml` unter `lovelace: dashboards:` registrieren.
-- `examples/ha-kiosk-banner-snippet.yaml` → als zusätzliche Karte in ein
-  bestehendes Kiosk-Dashboard einfügen (zeigt neue Erkennung 90 Sekunden
-  lang an, blendet danach automatisch aus).
-
-Nach dem Einfügen: **Einstellungen → System → Neu laden → YAML-
-Konfiguration neu laden** (Packages + Dashboards), kein voller Neustart
-nötig.
-
 ## Test ohne Kamera
 
-Die Pipeline lässt sich vor der Kamera-Inbetriebnahme durchtesten, indem man
-per `mosquitto_pub` manuell eine Testnachricht auf `home/vogelbad/erkennung`
-schickt:
-
-```bash
-mosquitto_pub -h <mqtt-broker-ip> -u <user> -P <passwort> \
-  -t home/vogelbad/erkennung \
-  -m '{"umgangssprachlich":"Blaumeise","lateinisch":"Cyanistes caeruleus","konfidenz":0.93,"anmerkung":"Test","zeitstempel":"2026-07-17T08:00:00","bild_url":"https://example.invalid/test.jpg"}'
-```
-
-Damit lässt sich der Home-Assistant-Teil (Sensor, Dashboard, Kiosk-Banner,
-Notification) unabhängig von Frigate/n8n/Kamera verifizieren.
+Der komplette Home-Assistant-Teil lässt sich unabhängig von
+Frigate/n8n/Kamera durchtesten, indem man per `mosquitto_pub` manuell eine
+Testnachricht auf `home/vogelbad/erkennung` schickt — Details dazu in
+[homeassistant.md](homeassistant.md#test-ohne-kamera).
