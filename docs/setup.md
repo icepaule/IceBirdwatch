@@ -14,7 +14,7 @@ sequenceDiagram
 
     Cam->>Frigate: RTSP-Stream
     Frigate->>Frigate: Bewegung + Objekt "bird" erkannt
-    Frigate->>MQTT: publish frigate/events (Snapshot verfügbar)
+    Frigate->>MQTT: publish frigate/reviews (type=end, objects=[bird])
     MQTT->>n8n: Trigger
     n8n->>Frigate: GET Snapshot (JPEG)
     n8n->>Ollama: POST /api/generate (Bild + Prompt, qwen2.5vl)
@@ -54,25 +54,36 @@ Nach Import:
 
 1. **MQTT-Credential** anlegen (Broker-Host/Port/User/Passwort des eigenen
    Mosquitto) und in beiden MQTT-Nodes zuweisen.
-2. **SQLite-Credential** anlegen, Pfad auf die Datenbankdatei im n8n-
-   Datenverzeichnis (`~/.n8n/vogelbad_historie.db`) zeigen lassen. Schema:
-   ```sql
-   CREATE TABLE IF NOT EXISTS vogelbad_historie (
-     id INTEGER PRIMARY KEY AUTOINCREMENT,
-     event_id TEXT,
-     umgangssprachlich TEXT,
-     lateinisch TEXT,
-     konfidenz REAL,
-     anmerkung TEXT,
-     zeitstempel TEXT,
-     bild_url TEXT
-   );
-   ```
+2. **Keine Datenbank nötig**: Die Historie wird als einfache JSON-Datei
+   (`~/.n8n/vogelbad_historie.json`, Startinhalt `[]`) direkt per `fs` in den
+   Code-Nodes gelesen/geschrieben — das n8n-nodes-base-Paket bringt in
+   aktuellen Versionen keinen SQLite-Node mehr mit, und ein DB-Credential
+   entfällt damit komplett. Datei einmalig anlegen und für den n8n-User
+   beschreibbar machen.
 3. Beide Workflows **aktivieren**.
 4. **Ollama-Prompt anpassen**: Node "Ollama: qwen2.5vl Artbestimmung" im
    ersten Workflow → `jsonBody` → Feld `prompt`. Genau hier ist der Punkt, an
    dem sich Sprache, Detailgrad oder Sonderregeln (z.B. "auch Eichhörnchen
    erkennen") ändern lassen, ohne Code anzufassen.
+
+### Zwei Stolpersteine bei aktuellen Frigate-/n8n-Versionen
+
+- **Frigate 0.17+ hat `frigate/events` durch `frigate/reviews` ersetzt.**
+  Statt eines flachen `{type, before, after}` mit `after.label`/`after.camera`
+  gibt es jetzt ein verschachteltes Review-Objekt mit
+  `after.data.objects` (Array von Labels wie `"bird"`) und
+  `after.data.detections` (Array der eigentlichen Event-IDs, die für den
+  Snapshot-Abruf gebraucht werden). Der Filter-Node im Workflow ist bereits
+  auf dieses Schema angepasst.
+- **Große Snapshots landen bei n8n im `filesystem-v2`-Binärmodus.** Der
+  klassische Trick `$input.item.binary.data.data` liefert dann nur den
+  String `"filesystem-v2"` statt echter Bilddaten (Ollama meldet dann
+  `illegal base64 data at input byte 10`). Der zuverlässige Weg ist der
+  eingebaute **"Convert to/from binary data"-Node** (`moveBinaryData`,
+  Modus "Binary to JSON", Option "Data Is Base64"/"Keep As Base64") statt
+  eines eigenen Code-Node-Hacks — der läuft im Hauptprozess und nicht im
+  separaten JS-Task-Runner, der auf Binärdaten-Zugriff nicht zuverlässig
+  reagiert.
 
 ## 3. Home Assistant
 

@@ -30,22 +30,24 @@ flowchart LR
     subgraph "ki02 (10.10.0.210)"
         N8N["n8n Workflow<br/>MQTT-Trigger"]
         OLLAMA["Ollama<br/>qwen2.5vl:7b<br/>Artbestimmung"]
-        SQLITE[("SQLite<br/>vogelbad_historie.db")]
+        JSONFILE[("vogelbad_historie.json<br/>(im n8n-Datenverzeichnis)")]
     end
 
     subgraph "NUC-HA (10.10.0.100)"
         MQTT{{"Mosquitto<br/>MQTT-Broker"}}
+        RELAY["TCP-Relay<br/>(socat, VLAN12-Ausnahme)"]
         HA["Home Assistant"]
         DASH["Dashboard 'Vogelbad'<br/>+ Kiosk-Banner"]
     end
 
-    CAM -- RTSP-Stream --> FRIGATE
-    FRIGATE -- "MQTT: frigate/events<br/>(Objekt=bird, Snapshot)" --> MQTT
+    CAM -- DVRIP-Stream --> RELAY
+    RELAY -- weitergeleitet --> FRIGATE
+    FRIGATE -- "MQTT: frigate/reviews<br/>(objects=[bird], Ende)" --> MQTT
     MQTT -- Event --> N8N
     N8N -- "Snapshot holen<br/>(Frigate API)" --> FRIGATE
     N8N -- "Bild + Prompt" --> OLLAMA
     OLLAMA -- "JSON: Art, lateinischer<br/>Name, Konfidenz" --> N8N
-    N8N -- INSERT --> SQLITE
+    N8N -- anhaengen --> JSONFILE
     N8N -- "MQTT: home/vogelbad/erkennung" --> MQTT
     MQTT --> HA
     HA --> DASH
@@ -61,7 +63,8 @@ anpassen lässt.
 
 | Komponente | Host | Zweck |
 |---|---|---|
-| Frigate | prox2 / CT203 (`frigate01`) | Nimmt RTSP-Stream, erkennt Bewegung + Objektklasse "bird", erzeugt Snapshots |
+| TCP-Relay (socat) | NUC-HA (systemd-Service) | Leitet die IoT-VLAN-isolierte Kamera an CT203 weiter, das selbst keinen VLAN-Zugriff hat |
+| Frigate | prox2 / CT203 (`frigate01`) | Nimmt DVRIP-Stream (über Relay), erkennt Bewegung + Objektklasse "bird", erzeugt Snapshots |
 | n8n | ki02 (10.10.0.210:5678) | Orchestriert Erkennung → Ollama → Speicherung → MQTT |
 | Ollama (qwen2.5vl:7b) | ki02 (10.10.0.210:11434) | Vision-KI für Artbestimmung (Umgangssprachlich + lateinisch) |
 | Mosquitto | NUC-HA (10.10.0.100:1883) | MQTT-Broker (Home-Assistant-Addon) |
@@ -69,12 +72,11 @@ anpassen lässt.
 
 ## Status
 
-- [x] Frigate-Container vorbereitet (Platzhalter-RTSP-URL)
-- [x] n8n-Workflows erstellt (Import ausstehend)
-- [x] Home-Assistant-Package + Dashboard + Kiosk-Banner vorbereitet
-- [ ] Echte Kamera-RTSP-URL eingetragen (nach Lieferung)
-- [ ] n8n-Workflows importiert + aktiviert
-- [ ] Home Assistant neu geladen / getestet
+- [x] Frigate-Container läuft, Kamera per DVRIP über TCP-Relay eingebunden
+- [x] n8n-Workflows importiert + aktiviert, End-to-End getestet (Ollama antwortet korrekt)
+- [x] Home Assistant neu geladen — Dashboard + Kiosk-Banner aktiv
+- [ ] Kamera nach draußen ans Vogelbad montiert (steht aktuell noch drinnen zum Laden)
+- [ ] Erste echte Vogel-Erkennung abgewartet
 
 Details siehe [docs/setup.md](docs/setup.md), Hardware-Hintergrund siehe
 [docs/hardware.md](docs/hardware.md).

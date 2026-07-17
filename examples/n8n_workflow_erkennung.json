@@ -3,14 +3,17 @@
   "nodes": [
     {
       "parameters": {
-        "topics": "frigate/events",
+        "topics": "frigate/reviews",
         "options": {}
       },
       "id": "a1000000-0000-0000-0000-000000000001",
-      "name": "MQTT: Frigate Events",
+      "name": "MQTT: Frigate Reviews",
       "type": "n8n-nodes-base.mqttTrigger",
       "typeVersion": 1,
-      "position": [-1200, 300],
+      "position": [
+        -1200,
+        300
+      ],
       "credentials": {
         "mqtt": {
           "id": "REPLACE_MIT_MQTT_CREDENTIAL_ID",
@@ -20,13 +23,16 @@
     },
     {
       "parameters": {
-        "jsCode": "const payload = JSON.parse($input.item.json.message);\nconst after = payload.after || {};\n\nconst isBird = after.label === 'bird';\nconst isVogelbad = after.camera === 'vogelbad';\nconst isEndOrSnapshot = payload.type === 'end' && after.has_snapshot === true;\n\nif (!isBird || !isVogelbad || !isEndOrSnapshot) {\n  return [];\n}\n\nreturn [{\n  json: {\n    event_id: after.id,\n    camera: after.camera,\n    label: after.label,\n    score: after.top_score,\n    start_time: after.start_time,\n    end_time: after.end_time\n  }\n}];"
+        "jsCode": "const payload = JSON.parse($input.item.json.message);\nconst after = payload.after || {};\nconst data = after.data || {};\n\nconst isVogelbad = after.camera === 'vogelbad';\nconst objects = data.objects || [];\nconst isBird = objects.includes('bird');\nconst isEnd = payload.type === 'end';\nconst detectionId = (data.detections || [])[0];\n\nif (!isBird || !isVogelbad || !isEnd || !detectionId) {\n  return [];\n}\n\nreturn [{\n  json: {\n    event_id: detectionId,\n    review_id: after.id,\n    camera: after.camera,\n    start_time: after.start_time,\n    end_time: after.end_time\n  }\n}];"
       },
       "id": "a1000000-0000-0000-0000-000000000002",
       "name": "Filter: neues Vogel-Event mit Snapshot",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-980, 300]
+      "position": [
+        -980,
+        300
+      ]
     },
     {
       "parameters": {
@@ -43,17 +49,30 @@
       "name": "Frigate: Snapshot holen",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-760, 300]
+      "position": [
+        -760,
+        300
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const base64 = $input.item.binary.data.data;\nreturn [{\n  json: {\n    ...$input.item.json,\n    image_base64: base64\n  },\n  binary: $input.item.binary\n}];"
+        "mode": "binaryToJson",
+        "setAllData": false,
+        "sourceKey": "data",
+        "destinationKey": "image_base64",
+        "options": {
+          "keepAsBase64": true,
+          "keepSource": true
+        }
       },
       "id": "a1000000-0000-0000-0000-000000000004",
       "name": "Bild zu Base64",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [-540, 300]
+      "type": "n8n-nodes-base.moveBinaryData",
+      "typeVersion": 1,
+      "position": [
+        -540,
+        300
+      ]
     },
     {
       "parameters": {
@@ -68,17 +87,23 @@
       "name": "Ollama: qwen2.5vl Artbestimmung",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-320, 300]
+      "position": [
+        -320,
+        300
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const raw = $input.item.json.response;\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  parsed = { umgangssprachlich: 'Parse-Fehler', lateinisch: '', konfidenz: 0, ist_vogel: false, anmerkung: String(raw).slice(0,200) };\n}\n\nreturn [{\n  json: {\n    event_id: $node['Filter: neues Vogel-Event mit Snapshot'].json.event_id,\n    umgangssprachlich: parsed.umgangssprachlich || 'unbekannt',\n    lateinisch: parsed.lateinisch || '',\n    konfidenz: parsed.konfidenz ?? 0,\n    ist_vogel: parsed.ist_vogel ?? true,\n    anmerkung: parsed.anmerkung || '',\n    zeitstempel: new Date().toISOString(),\n    bild_url: `http://<frigate-host>:5000/api/events/${$node['Filter: neues Vogel-Event mit Snapshot'].json.event_id}/snapshot.jpg`\n  }\n}];"
+        "jsCode": "const raw = $input.item.json.response;\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  parsed = { umgangssprachlich: 'Parse-Fehler', lateinisch: '', konfidenz: 0, ist_vogel: false, anmerkung: String(raw).slice(0,200) };\n}\n\nconst eventId = $node['Filter: neues Vogel-Event mit Snapshot'].json.event_id;\n\nreturn [{\n  json: {\n    event_id: eventId,\n    umgangssprachlich: parsed.umgangssprachlich || 'unbekannt',\n    lateinisch: parsed.lateinisch || '',\n    konfidenz: parsed.konfidenz ?? 0,\n    ist_vogel: parsed.ist_vogel ?? true,\n    anmerkung: parsed.anmerkung || '',\n    zeitstempel: new Date().toISOString(),\n    bild_url: `http://<frigate-host>:5000/api/events/${eventId}/snapshot.jpg`\n  }\n}];"
       },
       "id": "a1000000-0000-0000-0000-000000000006",
       "name": "Ollama-Antwort parsen",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-100, 300]
+      "position": [
+        -100,
+        300
+      ]
     },
     {
       "parameters": {
@@ -106,24 +131,23 @@
       "name": "IF: ist_vogel",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [120, 300]
+      "position": [
+        120,
+        300
+      ]
     },
     {
       "parameters": {
-        "operation": "executeQuery",
-        "query": "=INSERT INTO vogelbad_historie (event_id, umgangssprachlich, lateinisch, konfidenz, anmerkung, zeitstempel, bild_url)\nVALUES ('{{ $json.event_id }}', '{{ $json.umgangssprachlich.replace(\"'\", \"''\") }}', '{{ $json.lateinisch.replace(\"'\", \"''\") }}', {{ $json.konfidenz }}, '{{ $json.anmerkung.replace(\"'\", \"''\") }}', '{{ $json.zeitstempel }}', '{{ $json.bild_url }}');"
+        "jsCode": "const fs = require('fs');\nconst path = '/home/node/.n8n/vogelbad_historie.json';\n\nlet historie = [];\ntry {\n  historie = JSON.parse(fs.readFileSync(path, 'utf8'));\n} catch (e) {\n  historie = [];\n}\n\nhistorie.unshift({\n  event_id: $json.event_id,\n  umgangssprachlich: $json.umgangssprachlich,\n  lateinisch: $json.lateinisch,\n  konfidenz: $json.konfidenz,\n  anmerkung: $json.anmerkung,\n  zeitstempel: $json.zeitstempel,\n  bild_url: $json.bild_url\n});\n\nhistorie = historie.slice(0, 200);\nfs.writeFileSync(path, JSON.stringify(historie, null, 2));\n\nreturn [{ json: $json }];"
       },
       "id": "a1000000-0000-0000-0000-000000000008",
-      "name": "SQLite: Historie speichern",
-      "type": "n8n-nodes-base.sqlite",
-      "typeVersion": 1,
-      "position": [340, 200],
-      "credentials": {
-        "sqlite": {
-          "id": "REPLACE_MIT_SQLITE_CREDENTIAL_ID",
-          "name": "vogelbad_historie.db"
-        }
-      }
+      "name": "Historie: an JSON-Datei anhaengen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        340,
+        200
+      ]
     },
     {
       "parameters": {
@@ -138,7 +162,10 @@
       "name": "MQTT: an Home Assistant publishen",
       "type": "n8n-nodes-base.mqtt",
       "typeVersion": 1,
-      "position": [340, 400],
+      "position": [
+        340,
+        400
+      ],
       "credentials": {
         "mqtt": {
           "id": "REPLACE_MIT_MQTT_CREDENTIAL_ID",
@@ -148,35 +175,91 @@
     }
   ],
   "connections": {
-    "MQTT: Frigate Events": {
-      "main": [[{ "node": "Filter: neues Vogel-Event mit Snapshot", "type": "main", "index": 0 }]]
+    "MQTT: Frigate Reviews": {
+      "main": [
+        [
+          {
+            "node": "Filter: neues Vogel-Event mit Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Filter: neues Vogel-Event mit Snapshot": {
-      "main": [[{ "node": "Frigate: Snapshot holen", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Frigate: Snapshot holen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Frigate: Snapshot holen": {
-      "main": [[{ "node": "Bild zu Base64", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Bild zu Base64",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Bild zu Base64": {
-      "main": [[{ "node": "Ollama: qwen2.5vl Artbestimmung", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Ollama: qwen2.5vl Artbestimmung",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Ollama: qwen2.5vl Artbestimmung": {
-      "main": [[{ "node": "Ollama-Antwort parsen", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Ollama-Antwort parsen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Ollama-Antwort parsen": {
-      "main": [[{ "node": "IF: ist_vogel", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "IF: ist_vogel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "IF: ist_vogel": {
       "main": [
         [
-          { "node": "SQLite: Historie speichern", "type": "main", "index": 0 },
-          { "node": "MQTT: an Home Assistant publishen", "type": "main", "index": 0 }
+          {
+            "node": "Historie: an JSON-Datei anhaengen",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "MQTT: an Home Assistant publishen",
+            "type": "main",
+            "index": 0
+          }
         ],
         []
       ]
     }
   },
-  "active": false,
+  "active": true,
   "settings": {
     "executionOrder": "v1"
   }
