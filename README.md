@@ -75,7 +75,8 @@ anpassen lässt.
 - [x] Frigate-Container läuft, Kamera per DVRIP über TCP-Relay eingebunden
 - [x] n8n-Workflows importiert + aktiviert, End-to-End getestet (Ollama antwortet korrekt)
 - [x] Home Assistant neu geladen — Dashboard + Kiosk-Banner aktiv
-- [ ] Kamera nach draußen ans Vogelbad montiert (steht aktuell noch drinnen zum Laden)
+- [x] Kamera draußen am Vogelbad montiert
+- [x] Privacy-Crop aktiv (Nachbarhaus rechts ausgeblendet, siehe docs/setup.md)
 - [ ] Erste echte Vogel-Erkennung abgewartet
 
 Details siehe [docs/setup.md](docs/setup.md), Hardware-Hintergrund siehe

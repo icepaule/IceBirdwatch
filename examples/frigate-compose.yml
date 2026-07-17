@@ -5,6 +5,10 @@ services:
     restart: unless-stopped
     shm_size: "128mb"
     devices: []
+    environment:
+      # noetig fuer den go2rtc-"exec"-Crop-Stream, siehe docs/setup.md
+      # Abschnitt "Privacy-Crop" - exec:-Quellen sind sonst deaktiviert.
+      - GO2RTC_ALLOW_ARBITRARY_EXEC=true
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - ./config.yml:/config/config.yml:ro

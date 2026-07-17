@@ -11,19 +11,35 @@ detectors:
     num_threads: 2
 
 # ---------------------------------------------------------------------------
-# TODO (morgen, nach Lieferung der WAVEEME-Kamera):
-# 1. Kamera per App ans WLAN koppeln (Bad!Net oder Bad!IoT je nach Standort)
-# 2. IP der Kamera ermitteln (z.B. per nmap-Scan oder AdGuard-DHCP-Leases)
-# 3. nmap -p 554,34567,8000,37777,80 <Kamera-IP> -> pruefen welche Ports offen sind
-# 4. RTSP-URL unten anpassen (Standard-Xiongmai-Muster, Nutzer/Passwort ggf. aus App/Label):
-#    rtsp://<user>:<pass>@<Kamera-IP>:554/user=<user>&password=<pass>&channel=1&stream=0.sdp
-# 5. Nach Anpassung: docker compose restart im CT203 (frigate01)
+# Diagnose-Vorgehen: siehe docs/hardware.md ("Diagnose-Vorgehen").
+# Bei dieser Kamera: RTSP (554) zu, DVRIP/XM-Protokoll auf 34567 offen ->
+# go2rtc (in Frigate eingebaut) spricht DVRIP nativ, kein RTSP-URL-Bau noetig.
+#
+# Falls die Kamera in einem isolierten IoT-VLAN haengt, auf das der
+# Frigate-Host keinen Zugriff hat: TCP-Relay (z.B. socat) auf einem Host mit
+# Zugriff aufsetzen, Frigate zeigt dann auf den Relay statt direkt auf die
+# Kamera-IP. Details siehe docs/setup.md.
+#
+# Privacy-Crop (Nachbargrundstueck im Bild): siehe docs/setup.md Abschnitt
+# "Privacy-Crop" - NICHT als Frigate output_args, sondern als eigener
+# go2rtc-"exec"-Stream VOR Frigate, mit korrekt ermittelter realer
+# Stream-Aufloesung (nicht aus Kamera-Config-Feldern raten!) und
+# "format=yuv420p" im Filter gegen Farbfehler.
 # ---------------------------------------------------------------------------
+go2rtc:
+  streams:
+    vogelbad_dvrip:
+      - dvrip://CHANGE_ME:CHANGE_ME@<kamera-ip-oder-relay>:34567
+    # optional, nur falls Privacy-Crop gebraucht wird (siehe docs/setup.md):
+    # vogelbad_cropped:
+    #   - exec:/usr/lib/ffmpeg/7.0/bin/ffmpeg -i rtsp://127.0.0.1:8554/vogelbad_dvrip -vf "crop=W:H:X:Y,format=yuv420p" -c:v libx264 -preset ultrafast -an -f rtsp {{output}}
+
 cameras:
   vogelbad:
     ffmpeg:
       inputs:
-        - path: rtsp://TODO-USER:TODO-PASSWORD@TODO-KAMERA-IP:554/user=TODO-USER&password=TODO-PASSWORD&channel=1&stream=0.sdp
+        - path: rtsp://127.0.0.1:8554/vogelbad_dvrip
+          input_args: preset-rtsp-restream
           roles:
             - detect
             - record
@@ -40,20 +56,26 @@ cameras:
           threshold: 0.7
     record:
       enabled: true
-      retain:
-        days: 7
-        mode: motion
     snapshots:
       enabled: true
       bounding_box: false
       retain:
         default: 30
 
+# Schema seit Frigate 0.15+ (alteres record.retain.days/mode direkt gibt es
+# nicht mehr, "Extra inputs are not permitted"):
 record:
   enabled: true
-  retain:
+  motion:
     days: 3
-    mode: all
+  alerts:
+    retain:
+      days: 7
+      mode: motion
+  detections:
+    retain:
+      days: 7
+      mode: motion
 
 snapshots:
   enabled: true

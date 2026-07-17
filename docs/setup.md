@@ -85,6 +85,67 @@ Nach Import:
   separaten JS-Task-Runner, der auf Binärdaten-Zugriff nicht zuverlässig
   reagiert.
 
+## Privacy-Crop (Nachbargrundstück ausblenden)
+
+Bei Weitwinkel-/Fisheye-Kameras wie dieser landet fast immer ungewollt
+Nachbargrundstück im Bild. Getestet und wieder verworfen wurde die
+**native Privacy-Mask der Kamera-Firmware** (Xiongmai-Feld
+`AVEnc.VideoWidget.Covers`, per DVRIP setzbar, API bestätigt Erfolg) — im
+echten Geräte-Config-Export steht aber `"AVEnc.Cover": null`, d.h. das
+Feature existiert nur im geerbten Xiongmai-SDK-Schema, ist am Encoder
+dieses Kameramodells aber nicht verdrahtet und hat keinerlei Wirkung.
+
+Der funktionierende Weg ist ein **Crop in einem eigenen go2rtc-`exec`-Stream**,
+der Frigate vorgeschaltet wird (nicht als Frigate-`output_args`, siehe
+unten warum):
+
+```yaml
+go2rtc:
+  streams:
+    <kamera>_dvrip:
+      - dvrip://user:pass@host:34567
+    <kamera>_cropped:
+      - exec:/usr/lib/ffmpeg/7.0/bin/ffmpeg -i rtsp://127.0.0.1:8554/<kamera>_dvrip -vf "crop=W:H:X:Y,format=yuv420p" -c:v libx264 -preset ultrafast -an -f rtsp {{output}}
+
+cameras:
+  <kamera>:
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/<kamera>_cropped
+          input_args: preset-rtsp-restream
+          roles: [detect, record]
+```
+
+Zwei nicht offensichtliche Stolpersteine dabei:
+
+1. **Reale Stream-Auflösung prüfen, nicht raten.** Kamera-Config-Felder wie
+   `Camera.FishLensParam.ImageWidth/Height` beschreiben NICHT zwangsläufig
+   die tatsächliche Hauptstream-Auflösung. Bei uns stand dort 1280x720,
+   der echte Stream lief aber mit **2880x1616 ("5M")** — bestätigt per
+   `ffmpeg -i rtsp://.../<kamera>_dvrip` (Zeile `Stream #0:0: Video: hevc
+   ... 2880x1616`) und per Geräte-Config-Export (`AVEnc.Encode[0]
+   .MainFormat[0].Video.Resolution: "5M"`). Ein Crop mit falscher
+   Referenzauflösung schneidet nur einen kleinen, falschen Bildausschnitt
+   heraus (bei uns: linke obere Ecke statt Bildmitte).
+2. **`format=yuv420p` in die Filterkette hängen.** Manche Kamera-Streams
+   liefern `yuvj420p` (Full-Range/JPEG-Farbraum). Ohne explizite
+   Formatangabe im selben `-vf`-Ausdruck kommt es bei Crop+Neukodierung zu
+   sichtbaren Farbfehlern (Lila-/Magenta-Stich, v.a. auf Grün/Vegetation).
+
+**Warum nicht einfach `-vf crop=...` in Frigates eigenem `output_args`?**
+Frigate hängt für die `detect`-Rolle IMMER zusätzlich einen eigenen
+`-vf fps=..,scale=..` vor benutzerdefinierte `output_args` — zwei `-vf` im
+selben ffmpeg-Aufruf kollidieren (nur der letzte gewinnt bzw. das Ergebnis
+ist unvorhersehbar). Der Crop muss deshalb VOR Frigate passieren, nicht in
+Frigates eigener ffmpeg-Pipeline.
+
+**Exakten Crop-Bereich ermitteln**, wenn kein Lineal am Bildschirm liegt:
+Referenzbild vom gewünschten Ausschnitt (z.B. Screenshot aus der
+Hersteller-App) per Feature-Matching (OpenCV ORB + Homographie) gegen ein
+Vollbild der Kamera abgleichen, statt Pixel zu schätzen — deutlich
+präziser als Augenmaß, funktioniert auch wenn Referenzbild und Vollbild
+unterschiedliche Auflösung/Seitenverhältnis/Kompression haben.
+
 ## 3. Home Assistant
 
 - `examples/ha-package-vogelbad_kamera.yaml` → nach `packages/` kopieren.
